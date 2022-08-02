@@ -75,8 +75,7 @@ def queue_image_for_iiifhosting(mdb, **kwargs):
     size = get_image_size(kwargs['url'])
     logger.info(f'queue_image_for_iiifhosting: url={kwargs["url"]} name={name} size={size}')
     if size:
-        image_data = mdb['images'].find_one({'_id': kwargs['url']})
-        if image_data:
+        if image_data := mdb['images'].find_one({'_id': kwargs['url']}):
             image_data['source_size'] = size
         else:
             mdb['images'].insert_one({
@@ -133,9 +132,8 @@ def add_image_data_to_manifest(manifest, image_data):
                 'profile': 'http://iiif.io/api/image/2/level2.json'
             }
             manifest['thumbnail'] = f'{image_data["url"]}full/150,/0/default.jpg'
-        else:
-            if 'thumbnail' in manifest:
-                del manifest['thumbnail']
+        elif 'thumbnail' in manifest:
+            del manifest['thumbnail']
     logger.debug(json.dumps(manifest, indent=2))
     return manifest
 
@@ -220,14 +218,13 @@ def update_manifest(mdb, manifest, image_data, **kwargs):
 
 def _source(url):
     _url = urlparse(url)
-    if _url.hostname == 'raw.githubusercontent.com':
-        path_elems = [elem for elem in _url.path.split('/') if elem]
-        acct, repo, ref = path_elems[:3]
-        path = f'/{"/".join(path_elems[3:])}'
-        logger.info(f'GitHub image: hostname={_url.hostname} acct={acct} repo={repo} ref={ref} path={path}')
-        return f'https://{_url.hostname}/{acct}/{repo}/main{path}'
-    else:
+    if _url.hostname != 'raw.githubusercontent.com':
         return url
+    path_elems = [elem for elem in _url.path.split('/') if elem]
+    acct, repo, ref = path_elems[:3]
+    path = f'/{"/".join(path_elems[3:])}'
+    logger.info(f'GitHub image: hostname={_url.hostname} acct={acct} repo={repo} ref={ref} path={path}')
+    return f'https://{_url.hostname}/{acct}/{repo}/main{path}'
 
 @app.route('/gp-proxy/<path:path>', methods=['GET', 'HEAD'])
 def gp_proxy(path):
@@ -265,22 +262,20 @@ def manifest(path=None):
         mdb = connect_db()
         manifest = mdb['manifests'].find_one({'_id': mid})
         logger.info(f'manifest: method={request.method} mid={mid} found={manifest is not None} refresh={refresh} referrer={referrer} can_mutate={can_mutate}')
-        if manifest:
-            etag = hashlib.md5(json.dumps(manifest.get('metadata',{}), sort_keys=True).encode()).hexdigest()
-            # headers = {**cors_headers, **{'ETag': etag}}
-            headers = {'ETag': etag}
-            if request.method == 'GET':
-                del manifest['_id']
-                if 'service' in manifest['sequences'][0]['canvases'][0]['images'][0]['resource']:
-                    manifest['sequences'][0]['canvases'][0]['images'][0]['resource']['service']['profile'] = 'http://iiif.io/api/image/2/level2.json'
-                source_url = manifest['sequences'][0]['canvases'][0]['images'][0]['resource']['@id']
-                if refresh:
-                    make_iiif_image(mdb, manifest, url=source_url)
-                return (manifest, 200, headers)
-            else: # HEAD
-                return ('', 204, headers)
-        else:
+        if not manifest:
             return 'Not found', 404
+        etag = hashlib.md5(json.dumps(manifest.get('metadata',{}), sort_keys=True).encode()).hexdigest()
+        # headers = {**cors_headers, **{'ETag': etag}}
+        headers = {'ETag': etag}
+        if request.method != 'GET':
+            return ('', 204, headers)
+        del manifest['_id']
+        if 'service' in manifest['sequences'][0]['canvases'][0]['images'][0]['resource']:
+            manifest['sequences'][0]['canvases'][0]['images'][0]['resource']['service']['profile'] = 'http://iiif.io/api/image/2/level2.json'
+        source_url = manifest['sequences'][0]['canvases'][0]['images'][0]['resource']['@id']
+        if refresh:
+            make_iiif_image(mdb, manifest, url=source_url)
+        return (manifest, 200, headers)
     elif request.method == 'POST':
 
         mdb = connect_db()
@@ -294,17 +289,20 @@ def manifest(path=None):
 
         manifest = mdb['manifests'].find_one({'_id': mid})
 
-        refresh = str(input_data.pop('refresh', False)).lower() in ('', 'true')
+        refresh = str(input_data.pop('refresh', False)).lower() in {'', 'true'}
 
         logger.info(f'manifest: method={request.method} source={source} mid={mid} found={manifest is not None} refresh={refresh} referrer={referrer} can_mutate={can_mutate}')
 
         if manifest:
             # logger.info(f'manifest={manifest}')
             if can_mutate:
-                if refresh or 'service' not in manifest['sequences'][0]['canvases'][0]['images'][0]['resource']:
+                if refresh:
+                    image_data = get_image_data(mdb, source)
+                    make_iiif_image(mdb, manifest, **input_data)
+                elif 'service' not in manifest['sequences'][0]['canvases'][0]['images'][0]['resource']:
                     image_data = get_image_data(mdb, source)
                     # logger.info(f'image_data={image_data}')
-                    if refresh or image_data is None or image_data['status'] != 'done':
+                    if image_data is None or image_data['status'] != 'done':
                         make_iiif_image(mdb, manifest, **input_data)
                 else:
                     image_data = None
@@ -312,9 +310,8 @@ def manifest(path=None):
                 input_data_md_hash = hashlib.md5(json.dumps(metadata(**input_data), sort_keys=True).encode()).hexdigest()
                 if (image_data is not None) or (manifest_md_hash != input_data_md_hash):
                     manifest = update_manifest(mdb, manifest, image_data, **input_data)
-            else:
-                if 'service' in manifest['sequences'][0]['canvases'][0]['images'][0]['resource']:
-                    manifest['sequences'][0]['canvases'][0]['images'][0]['resource']['service']['profile'] = 'http://iiif.io/api/image/2/level2.json'
+            elif 'service' in manifest['sequences'][0]['canvases'][0]['images'][0]['resource']:
+                manifest['sequences'][0]['canvases'][0]['images'][0]['resource']['service']['profile'] = 'http://iiif.io/api/image/2/level2.json'
 
         else:
             if not can_mutate:
@@ -336,7 +333,7 @@ def manifest(path=None):
                 make_iiif_image(mdb, manifest, **input_data)
             manifest = make_manifest_v2_1_1(mdb, mid, image_data, **input_data)
         return manifest, 200
-    
+
     elif request.method == 'PUT':
         if not can_mutate:
             return ('Not authorized', 403)
@@ -379,7 +376,7 @@ def iiifhosting_webhook():
     return 'OK', 200
 
 def _calc_region_and_size(image_data, args, type='thumbnail'):
-        
+    
     im_width = int(image_data['width'])
     im_height = int(image_data['height'])
 
@@ -394,7 +391,7 @@ def _calc_region_and_size(image_data, args, type='thumbnail'):
         if 'width' in args: width = int(args['width'])
         if 'height' in args: height = int(args['height'])
 
-    if width == None and height == None:
+    if width is None and height is None:
         width = 400 if type == 'thumbnail' else 1000
         height = 260 if type == 'thumbnail' else 400
     else:
@@ -449,35 +446,19 @@ def thumbnail():
                 # logger.info(json.dumps(image_data, indent=2))
                 thumbnail_url = f'{image_data["url"].replace("http:","https:")}{region}/{size}/{rotation}/{quality}.{format}'
                 logger.info(thumbnail_url)
-                return redirect(thumbnail_url)
-                '''
-                resp = requests.get(thumbnail_url)
-                if resp.status_code == 200:
-                    content = resp.content
-                    if content:
-                        return (content, 200, {'Content-Type': 'image/jpeg', 'Content-Length': len(content)})
-                '''
             else:
-                if can_mutate:
-                    queue_image_for_iiifhosting(mdb, url=source)
-                    placeholder = get_image_data(mdb, placeholder_image)
-                    if region == 'full':
-                        region, size = _calc_region_and_size(placeholder, args, action)
-                    thumbnail_url = f'{placeholder["url"].replace("http:","https:")}{region}/{size}/{rotation}/{quality}.{format}'
-                    return redirect(thumbnail_url)
-                    '''
-                    resp = requests.get(thumbnail_url)
-                    if resp.status_code == 200:
-                        content = resp.content
-                        if content:
-                            return (content, 200, {'Content-Type': 'image/jpeg', 'Content-Length': len(content)})
-                    '''
-                else:
+                if not can_mutate:
                     return 'Not found', 404
+                queue_image_for_iiifhosting(mdb, url=source)
+                placeholder = get_image_data(mdb, placeholder_image)
+                if region == 'full':
+                    region, size = _calc_region_and_size(placeholder, args, action)
+                thumbnail_url = f'{placeholder["url"].replace("http:","https:")}{region}/{size}/{rotation}/{quality}.{format}'
+            return redirect(thumbnail_url)
     return 'Bad Request', 400
 
 def usage():
-    print('%s [hl:]' % sys.argv[0])
+    print(f'{sys.argv[0]} [hl:]')
     print('   -h --help             Print help message')
     print('   -l --loglevel         Logging level (default=warning)')
 
@@ -488,7 +469,7 @@ if __name__ == '__main__':
         opts, args = getopt.getopt(sys.argv[1:], 'hl:', ['help', 'loglevel'])
     except getopt.GetoptError as err:
         # print help information and exit:
-        print(str(err)) # will print something like "option -a not recognized"
+        print(err)
         usage()
         sys.exit(2)
 
@@ -496,8 +477,7 @@ if __name__ == '__main__':
         if o in ('-l', '--loglevel'):
             loglevel = a.lower()
             if loglevel in ('error',): logger.setLevel(logging.ERROR)
-            elif loglevel in ('warn','warning'): logger.setLevel(logging.INFO)
-            elif loglevel in ('info',): logger.setLevel(logging.INFO)
+            elif loglevel in ('warn', 'warning', 'info'): logger.setLevel(logging.INFO)
             elif loglevel in ('debug',): logger.setLevel(logging.DEBUG)
         elif o in ('-h', '--help'):
             usage()

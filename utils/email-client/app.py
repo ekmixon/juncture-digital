@@ -60,7 +60,11 @@ def sendgrid(**kwargs):
 
 def parse_email(s):
     match = re.search(r'<(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b)>', s)
-    return {'name': s.split('<')[0].strip(), 'email': match.group(1)} if match else {'name': '', 'email': s.strip()}
+    return (
+        {'name': s.split('<')[0].strip(), 'email': match[1]}
+        if match
+        else {'name': '', 'email': s.strip()}
+    )
 
 def sendinblue(**kwargs):
     data = {
@@ -93,13 +97,13 @@ def _sendmail():
 
 def usage():
     print(f'{sys.argv[0]} [hl:p:f:t:s:m:]')
-    print(f'   -h --help             Print help message')
-    print(f'   -l --loglevel         Logging level (default=warning)')
+    print('   -h --help             Print help message')
+    print('   -l --loglevel         Logging level (default=warning)')
     print(f'   -p --provider         Provider (default={config["default_provider"]}')
-    print(f'   -f --from             Sender email address')
-    print(f'   -t --to               Recipient email addresses (comma separated)')
-    print(f'   -s --subject          Email subject')
-    print(f'   -m --message          Email message')
+    print('   -f --from             Sender email address')
+    print('   -t --to               Recipient email addresses (comma separated)')
+    print('   -s --subject          Email subject')
+    print('   -m --message          Email message')
 
 
 if __name__ == '__main__':
@@ -108,7 +112,7 @@ if __name__ == '__main__':
         opts, args = getopt.getopt(sys.argv[1:], 'hl:p:f:t:s:m:', ['help', 'loglevel', 'provider', 'from', 'to', 'subject', 'message'])
     except getopt.GetoptError as err:
         # print help information and exit:
-        print(str(err)) # will print something like "option -a not recognized"
+        print(err)
         usage()
         sys.exit(2)
 
@@ -116,8 +120,7 @@ if __name__ == '__main__':
         if o in ('-l', '--loglevel'):
             loglevel = a.lower()
             if loglevel in ('error',): logger.setLevel(logging.ERROR)
-            elif loglevel in ('warn','warning'): logger.setLevel(logging.INFO)
-            elif loglevel in ('info',): logger.setLevel(logging.INFO)
+            elif loglevel in ('warn', 'warning', 'info'): logger.setLevel(logging.INFO)
             elif loglevel in ('debug',): logger.setLevel(logging.DEBUG)
         elif o in ('-p', '--provider'):
             kwargs['provider'] = a
